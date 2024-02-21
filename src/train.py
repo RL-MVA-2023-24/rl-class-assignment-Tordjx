@@ -1,177 +1,102 @@
-from gymnasium.wrappers import TimeLimit
-from env_hiv import HIVPatient
-
-env = TimeLimit(
-    env=HIVPatient(domain_randomization=False), max_episode_steps=200
-)  # The time wrapper limits the number of steps in an episode at 200.
-# Now is the floor is yours to implement the agent and train it.
-
-
-# You have to implement your own agent.
-# Don't modify the methods names and signatures, but you can add methods.
-# ENJOY!
+import env_hiv
+from pyvirtualdisplay import Display
+from IPython import display
 import torch
+#torch.multiprocessing.set_start_method("spawn")
+import torch.nn.functional as F
+import torch.multiprocessing as mp
 import torch.nn as nn
-import pickle
+import cma
 import numpy as np
 import gymnasium as gym
-from tqdm import tqdm
-from torch.distributions.categorical import Categorical
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-    torch.nn.init.orthogonal_(layer.weight, std)
-    torch.nn.init.constant_(layer.bias, bias_const)
-    return layer
+import matplotlib.pyplot as plt
+def fitness(x, ann, env, device):
+    ann.set_params(torch.Tensor(x))
+    return -evaluate(ann, env, device)
+def evaluate(ann, env, device,maxiter = 200):
+    #env.seed(0) # deterministic for demonstration
+    obs,_ = env.reset()
+    total_reward = 0
+    niter = 0
+    while True:
+        niter+=1
+        # Output of the neural net
+        net_output = ann(torch.from_numpy(obs).to(device))
+        # the action is the value clipped returned by the nn
+        action = net_output.data.cpu().numpy().argmax()
+        obs, reward, done, trunc,infos = env.step(action)
+        total_reward += reward
+        if done or niter>maxiter:
+            break
+    return total_reward
+hidden_dim = 128
+class NeuralNetwork(nn.Module):
 
-class ProjectAgent:
-    def __init__(self, config):
-        env = gym.make(config.env_name)
+    def __init__(self, input_shape, n_actions):
+        super(NeuralNetwork, self).__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.config = config
-        self.config.batch_size = int(config.num_steps)
-        self.config.minibatch_size = int(config.batch_size // config.num_minibatches)
-        self.config.num_iterations = config.total_timesteps // config.batch_size
-        self.critic = nn.Sequential(
-            layer_init(nn.Linear(np.array(env.single_observation_space.shape).prod(), 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 1), std=1.0),
-        ).to(self.device)
-        self.actor = nn.Sequential(
-            layer_init(nn.Linear(np.array(env.single_observation_space.shape).prod(), 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, env.single_action_space.n), std=0.01),
-        ).to(self.device)
-        self.env = env
-        self.optimizer = torch.optim.Adam(self.agent.parameters(), lr=config.learning_rate, eps=1e-5)
-    def get_action_and_value(self, x, action=None):
-        logits = self.actor(x)
-        probs = Categorical(logits=logits)
-        if action is None:
-            action = probs.sample()
-        return action, probs.log_prob(action), probs.entropy(), self.critic(x)
-    
-    def act(self, observation, use_random=False):
-        logits = self.actor(observation)
-        probs = Categorical(logits=logits)
-        action = probs.sample()
-        return action
+        self.l1 = nn.Linear(input_shape, hidden_dim).to(self.device)
+        self.l2 = nn.Linear(hidden_dim, hidden_dim).to(self.device)
+        self.lout = nn.Linear(hidden_dim, n_actions).to(self.device)
 
-    def save(self, path):
-        serialized= {"actor": self.actor, "critic":self.critic, "config":self.config}
+    def forward(self, x):
+        if type(x) != torch.Tensor :
+            x = torch.from_numpy(x)
+        x = F.relu(self.l1(x.float()))
+        x = F.relu(self.l2(x))
+        return self.lout(x)
+
+    def get_params(self):
+        p = np.empty((0,))
+        for n in self.parameters():
+            p = np.append(p, n.flatten().cpu().detach().numpy())
+        return p
+
+    def set_params(self, x):
+        start = 0
+        for p in self.parameters():
+            e = start + np.prod(p.shape)
+            p.data = (x[start:e]).to(torch.float32).reshape(p.shape).to(self.device)
+            start = e
+
+
+from joblib import delayed, Parallel
+
+
+
+
+
+from typing import Protocol
+import numpy as np
+from tqdm import tqdm
+import pickle
+class ProjectAgent():
+
+    def __init__(self,env, niter =50, noffsprings =25) -> None:
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.ann = NeuralNetwork(env.observation_space.shape[0], env.action_space.n).to(self.device)
+        self.es = cma.CMAEvolutionStrategy(len(self.ann.get_params()) * [0], 0.1, {'seed': 123})
+        self.niter = niter
+        self.noffsprings = noffsprings
+        self.env = env
+    def act(self, observation: np.ndarray, use_random: bool = False) -> int:
+        return self.ann(observation)
+    def save(self, path=""):
+        serialized= {"ann":self.ann.cpu()}
         with open(path+'saved.pkl', 'wb') as f:  # open a text file
             pickle.dump(serialized, f) # serialize the list
     def load(self):
-        with open('saved.pkl', 'wb') as f:  # open a text file
+        with open('saved.pkl', 'rb') as f:  # open a text file
             saved = pickle.load( f) # serialize the list
-        self.__init__(saved.config)
-        self.actor = saved.actor
-        self.critic = saved.critic
+        self.ann = saved['ann']
         try : 
             x,_ = self.env.reset()
-            self.actor(x)
+            self.act(x)
         except : 
-            raise "Actor incompatible with environnement"
-    def train(self): 
-        obs = torch.zeros(self.config.num_steps ,env.single_observation_space.shape).to(self.device)
-        actions = torch.zeros(self.config.num_steps , env.single_action_space.shape).to(self.device)
-        logprobs = torch.zeros(self.config.num_steps).to(self.device)
-        rewards = torch.zeros(self.config.num_steps).to(self.device)
-        dones = torch.zeros(self.config.num_steps).to(self.device)
-        values = torch.zeros(self.config.num_steps).to(self.device)
-        global_step = 0
-        next_obs, _ = env.reset(seed=self.config.seed)
-        next_obs = torch.Tensor(next_obs).to(self.device)
-        next_done = torch.zeros(1).to(self.device)
-        with tqdm(range(1, self.config.num_iterations + 1)) as pbar : 
-            for iteration in pbar:
-                for step in range(0, self.config.num_steps):
-                    global_step += 1
-                    obs[step] = next_obs
-                    dones[step] = next_done
-                    # ALGO LOGIC: action logic
-                    with torch.no_grad():
-                        action, logprob, _, value = self.agent.get_action_and_value(next_obs)
-                        values[step] = value.flatten()
-                    actions[step] = action
-                    logprobs[step] = logprob
-                    # TRY NOT TO MODIFY: execute the game and log data.
-                    next_obs, reward, terminations, truncations, infos = self.env.step(action.cpu().numpy())
-                    next_done = np.logical_or(terminations, truncations)
-                    rewards[step] = torch.tensor(reward).to(self.device).view(-1)
-                    next_obs, next_done = torch.Tensor(next_obs).to(self.device), torch.Tensor(next_done).to(self.device)
-                    # bootstrap value if not done
-                with torch.no_grad():
-                    next_value = self.agent.get_value(next_obs).reshape(1, -1)
-                    advantages = torch.zeros_like(rewards).to(self.device)
-                    lastgaelam = 0
-                    for t in reversed(range(self.config.num_steps)):
-                        if t == self.config.num_steps - 1:
-                            nextnonterminal = 1.0 - next_done
-                            nextvalues = next_value
-                        else:
-                            nextnonterminal = 1.0 - dones[t + 1]
-                            nextvalues = values[t + 1]
-                        delta = rewards[t] + self.config.gamma * nextvalues * nextnonterminal - values[t]
-                        advantages[t] = lastgaelam = delta + self.config.gamma * self.config.gae_lambda * nextnonterminal * lastgaelam
-                    returns = advantages + values
-                # flatten the batch, normalement ici pas besoin
-                b_obs = obs.reshape((-1,) + self.env.single_observation_space.shape)
-                b_logprobs = logprobs.reshape(-1)
-                b_actions = actions.reshape((-1,) + self.env.single_action_space.shape)
-                b_advantages = advantages.reshape(-1)
-                b_returns = returns.reshape(-1)
-                pbar.set_postfix(avg_returns = np.mean(returns))
-                b_values = values.reshape(-1)
-                # Optimizing the policy and value network
-                b_inds = np.arange(self.config.batch_size)
-                clipfracs = []
-                for epoch in range(self.config.update_epochs):
-                    np.random.shuffle(b_inds)
-                    for start in range(0, self.config.batch_size, self.config.minibatch_size):
-                        end = start + self.config.minibatch_size
-                        mb_inds = b_inds[start:end]
-
-                        _, newlogprob, entropy, newvalue = self.agent.get_action_and_value(b_obs[mb_inds], b_actions.long()[mb_inds])
-                        logratio = newlogprob - b_logprobs[mb_inds]
-                        ratio = logratio.exp()
-
-                        with torch.no_grad():
-                            # calculate approx_kl http://joschu.net/blog/kl-approx.html
-                            approx_kl = ((ratio - 1) - logratio).mean()
-                            clipfracs += [((ratio - 1.0).abs() > self.config.clip_coef).float().mean().item()]
-
-                        mb_advantages = b_advantages[mb_inds]
-                        if self.config.norm_adv:
-                            mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
-
-                        # Policy loss
-                        pg_loss1 = -mb_advantages * ratio
-                        pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - self.config.clip_coef, 1 + self.config.clip_coef)
-                        pg_loss = torch.max(pg_loss1, pg_loss2).mean()
-
-                        # Value loss
-                        newvalue = newvalue.view(-1)
-                        v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
-                        v_clipped = b_values[mb_inds] + torch.clamp(
-                            newvalue - b_values[mb_inds],
-                            -self.config.clip_coef,
-                            self.config.clip_coef,
-                        )
-                        v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
-                        v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                        v_loss = 0.5 * v_loss_max.mean()
-
-                        entropy_loss = entropy.mean()
-                        loss = pg_loss - self.config.ent_coef * entropy_loss + v_loss * self.config.vf_coef
-
-                        self.optimizer.zero_grad()
-                        loss.backward()
-                        nn.utils.clip_grad_norm_(self.agent.parameters(), self.config.max_grad_norm)
-                        self.optimizer.step()
-
-                    if self.config.target_kl is not None and approx_kl > self.config.target_kl:
-                        break
- 
+            raise Exception("Actor incompatible with environnement")
+    def train(self):
+        for i in range(self.niter):
+            solutions = torch.from_numpy(np.array(self.es.ask(self.noffsprings))).to(self.device)
+            fits=Parallel(n_jobs=17, backend = "loky")(delayed(fitness)(x, self.ann, self.env, self.device) for i, x in enumerate(solutions))    
+            self.es.tell(solutions.cpu(), fits)
+            self.es.disp()
