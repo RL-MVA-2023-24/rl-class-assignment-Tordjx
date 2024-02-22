@@ -130,8 +130,8 @@ class dqn_agent:
                 model_state_dict = self.model.state_dict()
                 tau = self.update_target_tau
                 for key in model_state_dict:
-                    target_state_dict[key] = tau*model_state_dict + (1-tau)*target_state_dict
-                target_model.load_state_dict(target_state_dict)
+                    target_state_dict[key] = tau*model_state_dict[key] + (1-tau)*target_state_dict[key]
+                self.target_model.load_state_dict(target_state_dict)
             # next transition
             step += 1            
             if done or trunc or step%200 ==0:
@@ -183,6 +183,8 @@ DQN = torch.nn.Sequential(nn.Linear(state_dim, nb_neurons),
                           nn.ReLU(),
                           nn.Linear(nb_neurons, nb_neurons),
                           nn.ReLU(), 
+                          nn.Linear(nb_neurons, nb_neurons),
+                          nn.ReLU(), 
                           nn.Linear(nb_neurons, n_action)).to(device)
 
 
@@ -201,12 +203,12 @@ config = {'nb_actions': env.action_space.n,
           'epsilon_delay_decay': 20,
           'batch_size': 4096,
           'gradient_steps': 1,
-          'update_target_strategy': 'replace', # or 'ema'
+          'update_target_strategy': 'ema', # or 'ema'
           'update_target_freq': 50,
           'update_target_tau': 0.005,
           'criterion': torch.nn.SmoothL1Loss(),
           'monitoring_nb_trials': 0,
-          "domain_randomization":False,
+          "domain_randomization":True,
           "epochs":1000}
 class ProjectAgent:
 
