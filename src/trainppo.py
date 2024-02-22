@@ -54,7 +54,7 @@ class ActorCritic(nn.Module):
         return action
 class ProjectAgent:
     def __init__(self, config):
-        env = HIVPatient()
+        env = HIVPatient(domain_randomization=True)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.config = config
         self.config.batch_size = int(config.num_steps)
