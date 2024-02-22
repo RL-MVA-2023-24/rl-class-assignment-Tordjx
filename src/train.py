@@ -8,14 +8,15 @@ class ReplayBuffer:
         self.data = []
         self.index = 0 # index of the next cell to be filled
         self.device = device
-    def append(self, s, a, r, s_, d):
+    def append(self, app):
         if len(self.data) < self.capacity:
             self.data.append(None)
-        self.data[self.index] = (s, a, r, s_, d)
+        self.data[self.index] = app
         self.index = (self.index + 1) % self.capacity
     def sample(self, batch_size):
         batch = random.sample(self.data, batch_size)
-        return list(map(lambda x:torch.Tensor(np.array(x)).to(self.device), list(zip(*batch))))
+        #return list(map(lambda x:torch.Tensor(np.array(x)).to(self.device), list(zip(*batch))))
+        return batch
     def __len__(self):
         return len(self.data)
 import torch
@@ -54,6 +55,7 @@ class dqn_agent:
         self.update_target_freq = config['update_target_freq'] if 'update_target_freq' in config.keys() else 20
         self.update_target_tau = config['update_target_tau'] if 'update_target_tau' in config.keys() else 0.005
         self.monitoring_nb_trials = config['monitoring_nb_trials'] if 'monitoring_nb_trials' in config.keys() else 0
+        self.n_step = config['n_step'] if 'n_step' in config.keys() else 3
 
     def MC_eval(self, env, nb_trials):   # NEW NEW NEW
         MC_total_reward = []
@@ -86,9 +88,21 @@ class dqn_agent:
     
     def gradient_step(self):
         if len(self.memory) > self.batch_size:
-            X, A, R, Y, D = self.memory.sample(self.batch_size)
-            QYmax = self.target_model(Y).max(1)[0].detach()
-            update = torch.addcmul(R, 1-D, QYmax, value=self.gamma)
+            nstep_traj = self.memory.sample(self.batch_size) #bsz nstep 5 
+            #X ,A,Y,D = nstep_traj[:,0,0],nstep_traj[:,0,1],nstep_traj[:,0,3],nstep_traj[:,0,4]
+            #X, A, R, Y, D = self.memory.sample(self.batch_size)
+            #QYmax = self.target_model(Y).max(1)[0].detach()
+            #update = torch.addcmul(R, 1-D, QYmax, value=self.gamma)
+            Y =torch.Tensor(np.array([x[-1][3] for x in nstep_traj])).to(device)
+            QYmax = self.target_model(Y).max(1)[0].detach().to(device)
+            update = torch.zeros_like(QYmax).to(device)
+            for s in range(self.n_step) :
+                D = torch.Tensor([x[s][-1] for x in nstep_traj]).to(device)
+                R = torch.Tensor([x[s][2] for x in nstep_traj]).to(device)
+                update = torch.addcmul(update, 1-D, R, value=self.gamma**s)
+            update = update + QYmax *self.gamma**self.n_step
+            X = torch.Tensor(np.array([x[0][0] for x in nstep_traj])).to(device)
+            A = torch.Tensor([x[0][1] for x in nstep_traj]).to(device)
             QXA = self.model(X).gather(1, A.to(torch.long).unsqueeze(1))
             loss = self.criterion(QXA, update.unsqueeze(1))
             self.optimizer.zero_grad()
@@ -105,6 +119,7 @@ class dqn_agent:
         state, _ = env.reset()
         epsilon = self.epsilon_max
         step = 0
+        nstep_traj = []
         while episode < max_episode:
             # update epsilon
             if step > self.epsilon_delay:
@@ -116,7 +131,11 @@ class dqn_agent:
                 action = greedy_action(self.model, state)
             # step
             next_state, reward, done, trunc, _ = env.step(action)
-            self.memory.append(state, action, reward, next_state, done)
+            nstep_traj.append([state, action, reward, next_state, done])
+            if len(nstep_traj)==self.n_step  :
+                self.memory.append(nstep_traj)
+                nstep_traj = []
+            #self.memory.append(state, action, reward, next_state, done)
             episode_cum_reward += reward
             # train
             for _ in range(self.nb_gradient_steps): 
@@ -201,14 +220,14 @@ config = {'nb_actions': env.action_space.n,
           'epsilon_max': 1.,
           'epsilon_decay_period': 1000,
           'epsilon_delay_decay': 20,
-          'batch_size': 4096,
+          'batch_size': 1024,
           'gradient_steps': 1,
           'update_target_strategy': 'ema', # or 'ema'
           'update_target_freq': 50,
           'update_target_tau': 0.005,
           'criterion': torch.nn.SmoothL1Loss(),
           'monitoring_nb_trials': 0,
-          "domain_randomization":True,
+          "domain_randomization":False,
           "epochs":1000}
 class ProjectAgent:
 
