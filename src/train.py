@@ -193,11 +193,12 @@ from tqdm import tqdm
 import pickle
 class ProjectAgent():
 
-    def __init__(self,config) -> None:
-        self.config = config
+    def __init__(self,config=None) -> None:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.env =env_hiv.HIVPatient(domain_randomization=config['domain_randomization'])
-        self.agent = dqn_agent(config, DQN)
+        if config !=None:
+            self.config = config
+            self.env =env_hiv.HIVPatient(domain_randomization=config['domain_randomization'])
+            self.agent = dqn_agent(config, DQN)
     def act(self, observation: np.ndarray, use_random: bool = False) -> int:
         return greedy_action(self.agent.model, observation)
     def save(self, path=""):
