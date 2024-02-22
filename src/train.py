@@ -212,6 +212,7 @@ from typing import Protocol
 import numpy as np
 from tqdm import tqdm
 import pickle
+
 config = {'nb_actions': env.action_space.n,
           'learning_rate': 0.001,
           'gamma': 0.99,
@@ -229,6 +230,7 @@ config = {'nb_actions': env.action_space.n,
           'monitoring_nb_trials': 0,
           "domain_randomization":False,
           "epochs":1000}
+from torch.distributions.categorical import Categorical
 class ProjectAgent:
 
     def __init__(self) :
@@ -236,13 +238,20 @@ class ProjectAgent:
         self.config = config
         self.env =env_hiv.HIVPatient(domain_randomization=config['domain_randomization'])
         self.agent = dqn_agent(config, DQN)
+    # def act(self, observation: np.ndarray, use_random: bool = False) -> int:
+    #     return greedy_action(self.agent.model, observation)
     def act(self, observation: np.ndarray, use_random: bool = False) -> int:
-        return greedy_action(self.agent.model, observation)
+        logits = self.agent.model(torch.Tensor(observation).to(self.device))
+        probs = Categorical(logits=logits)
+        action = probs.sample()
+        return action
     def save(self, path=""):
         serialized= {"dqn":self.agent.model.cpu(), "config":self.config}
         with open(path+'saved.pkl', 'wb') as f:  # open a text file
             pickle.dump(serialized, f) # serialize the list
     def load(self):
+        
+        
         with open('saved.pkl', 'rb') as f:  # open a text file
             saved = pickle.load( f) # serialize the list
         #self.__init__(saved['config'])
@@ -252,5 +261,16 @@ class ProjectAgent:
             self.act(x)
         except : 
             raise Exception("Actor incompatible with environnement")
+    # def load(self):
+    #     with open('saved.pkl', 'rb') as f:  # open a text file
+    #         saved = pickle.load( f) # serialize the list
+    #     #self.__init__(saved['config'])
+    #     self.agent.model = saved["dqn"].to(self.device)
+    #     try : 
+    #         x,_ = self.env.reset()
+    #         self.act(x)
+    #     except : 
+    #         raise E
+    
     def train(self):
         return self.agent.train(self.env,self.config['epochs'])
