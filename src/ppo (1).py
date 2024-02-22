@@ -87,7 +87,7 @@ def make_env(env_id, idx, capture_video, run_name):
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
             #env = gym.make(env_id)
-            env = env_hiv.HIVPatient(domain_randomization=True)
+            env = env_hiv.HIVPatient(domain_randomization=False)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         return env
 
@@ -313,3 +313,8 @@ for iteration in range(1, args.num_iterations + 1):
 
 envs.close()
 writer.close()
+
+import pickle
+serialized= {"dqn":agent.actor.cpu()}
+with open('saved.pkl', 'wb') as f:  # open a text file
+    pickle.dump(serialized, f) # serialize the list
