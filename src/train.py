@@ -191,14 +191,30 @@ from typing import Protocol
 import numpy as np
 from tqdm import tqdm
 import pickle
-class ProjectAgent():
+config = {'nb_actions': env.action_space.n,
+          'learning_rate': 0.001,
+          'gamma': 0.99,
+          'buffer_size': 1000000,
+          'epsilon_min': 0.01,
+          'epsilon_max': 1.,
+          'epsilon_decay_period': 1000,
+          'epsilon_delay_decay': 20,
+          'batch_size': 4096,
+          'gradient_steps': 1,
+          'update_target_strategy': 'replace', # or 'ema'
+          'update_target_freq': 50,
+          'update_target_tau': 0.005,
+          'criterion': torch.nn.SmoothL1Loss(),
+          'monitoring_nb_trials': 0,
+          "domain_randomization":False,
+          "epochs":1000}
+class ProjectAgent:
 
-    def __init__(self,config=None) -> None:
+    def __init__(self) :
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        if config !=None:
-            self.config = config
-            self.env =env_hiv.HIVPatient(domain_randomization=config['domain_randomization'])
-            self.agent = dqn_agent(config, DQN)
+        self.config = config
+        self.env =env_hiv.HIVPatient(domain_randomization=config['domain_randomization'])
+        self.agent = dqn_agent(config, DQN)
     def act(self, observation: np.ndarray, use_random: bool = False) -> int:
         return greedy_action(self.agent.model, observation)
     def save(self, path=""):
@@ -208,7 +224,7 @@ class ProjectAgent():
     def load(self):
         with open('saved.pkl', 'rb') as f:  # open a text file
             saved = pickle.load( f) # serialize the list
-        self.__init__(saved['config'])
+        #self.__init__(saved['config'])
         self.agent.model = saved["dqn"].to(self.device)
         try : 
             x,_ = self.env.reset()
