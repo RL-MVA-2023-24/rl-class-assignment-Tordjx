@@ -177,7 +177,7 @@ class dqn_agent:
                     print("Episode ", '{:2d}'.format(episode), 
                           ", epsilon ", '{:6.2f}'.format(epsilon), 
                           ", batch size ", '{:4d}'.format(len(self.memory)), 
-                          ", ep return ", '{:4.1f}'.format(episode_cum_reward), 
+                          ", ep return ", '{:e}'.format(episode_cum_reward), 
                           sep='')
 
                 
